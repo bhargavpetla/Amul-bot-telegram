@@ -345,74 +345,43 @@ async def show_products_callback(update: Update, context: ContextTypes.DEFAULT_T
     await _show_products_list(query, user, query.from_user.id, context, is_callback=True)
 
 
-async def _show_products_list(msg, user, user_id, context, is_callback=False):
-    """Helper to show products list"""
-    try:
-        amul_api.set_pincode(user["pincode"], user["substore_id"])
-        products = amul_api.get_protein_products(user["substore_id"])
+async def _display_products(msg, user, user_id, products, is_callback, from_cache=False):
+    """Display products list with keyboard"""
+    subscriptions = db.get_user_subscriptions(user_id)
+    subscribed_skus = [s["product_sku"] for s in subscriptions]
 
-        if not products:
-            keyboard = [
-                [InlineKeyboardButton("🔄 Retry", callback_data="cb_products")],
-                [InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")]
-            ]
-            if is_callback:
-                await msg.edit_message_text(
-                    "❌ *Could not load products*\n\nPlease try again.",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            else:
-                await msg.edit_text(
-                    "❌ *Could not load products*\n\nPlease try again.",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            return
+    # Create modern keyboard
+    keyboard = []
+    for product in products:
+        is_subscribed = product["sku"] in subscribed_skus
+        is_in_stock = product.get("in_stock", False)
 
-        # Save products to database
-        for p in products:
-            db.upsert_product(
-                p["id"], p["sku"], p["name"],
-                p.get("price", 0), p.get("image_url", ""),
-                p.get("category", ""),
-                p.get("in_stock", False), p.get("quantity", 0)
-            )
+        sub_icon = "✅" if is_subscribed else "⬜"
+        stock_icon = "🟢" if is_in_stock else "🔴"
 
-        context.user_data["products_cache"] = products
-
-        subscriptions = db.get_user_subscriptions(user_id)
-        subscribed_skus = [s["product_sku"] for s in subscriptions]
-
-        # Create modern keyboard
-        keyboard = []
-        for product in products:
-            is_subscribed = product["sku"] in subscribed_skus
-            is_in_stock = product.get("in_stock", False)
-
-            sub_icon = "✅" if is_subscribed else "⬜"
-            stock_icon = "🟢" if is_in_stock else "🔴"
-
-            name = product['name'][:28]
-            btn_text = f"{sub_icon} {name} {stock_icon}"
-
-            keyboard.append([
-                InlineKeyboardButton(btn_text, callback_data=f"toggle_{product['sku']}")
-            ])
+        name = product['name'][:28]
+        btn_text = f"{sub_icon} {name} {stock_icon}"
 
         keyboard.append([
-            InlineKeyboardButton("✅ Save & Continue", callback_data="products_done"),
-            InlineKeyboardButton("🔄 Refresh", callback_data="cb_products")
-        ])
-        keyboard.append([
-            InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")
+            InlineKeyboardButton(btn_text, callback_data=f"toggle_{product['sku']}")
         ])
 
-        reply_markup = InlineKeyboardMarkup(keyboard)
+    keyboard.append([
+        InlineKeyboardButton("✅ Save & Continue", callback_data="products_done"),
+        InlineKeyboardButton("🔄 Refresh", callback_data="cb_products")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")
+    ])
 
-        message = f"""
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Add indicator if showing cached data
+    cache_indicator = " 📦" if from_cache else " ✨"
+
+    message = f"""
 ╔══════════════════════════════════╗
-        🛒 *SELECT PRODUCTS*
+        🛒 *SELECT PRODUCTS*{cache_indicator}
 ╚══════════════════════════════════╝
 
 📍 Pincode: *{user['pincode']}*
@@ -425,10 +394,89 @@ async def _show_products_list(msg, user, user_id, context, is_callback=False):
 👆 _Tap a product to toggle tracking_
 """
 
-        if is_callback:
-            await msg.edit_message_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+    if is_callback:
+        await msg.edit_message_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+    else:
+        await msg.edit_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+async def _show_products_list(msg, user, user_id, context, is_callback=False):
+    """Helper to show products list"""
+    try:
+        # INSTANT LOAD: First show cached data from database (fast!)
+        cached_products = db.get_all_products()
+
+        if cached_products:
+            # Convert database format to expected format
+            products = [{
+                "id": p["product_id"],
+                "sku": p["sku"],
+                "name": p["name"],
+                "price": p["price"],
+                "image_url": p.get("image_url", ""),
+                "category": p.get("category", ""),
+                "in_stock": bool(p.get("in_stock", 0)),
+                "quantity": p.get("quantity", 0)
+            } for p in cached_products]
+
+            # Display cached products immediately
+            await _display_products(msg, user, user_id, products, is_callback, from_cache=True)
+
+            # BACKGROUND REFRESH: Now fetch fresh data and update if changed
+            try:
+                amul_api.set_pincode(user["pincode"], user["substore_id"])
+                fresh_products = amul_api.get_protein_products(user["substore_id"])
+
+                if fresh_products:
+                    # Update database with fresh data
+                    for p in fresh_products:
+                        db.upsert_product(
+                            p["id"], p["sku"], p["name"],
+                            p.get("price", 0), p.get("image_url", ""),
+                            p.get("category", ""),
+                            p.get("in_stock", False), p.get("quantity", 0)
+                        )
+
+                    # Update display with fresh data
+                    await _display_products(msg, user, user_id, fresh_products, is_callback, from_cache=False)
+                    context.user_data["products_cache"] = fresh_products
+            except Exception as refresh_error:
+                logger.warning(f"Background refresh failed (showing cached): {refresh_error}")
+                # Keep showing cached data - user already has something to work with
         else:
-            await msg.edit_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+            # No cache - must fetch from API (first time user)
+            amul_api.set_pincode(user["pincode"], user["substore_id"])
+            products = amul_api.get_protein_products(user["substore_id"])
+
+            if not products:
+                keyboard = [
+                    [InlineKeyboardButton("🔄 Retry", callback_data="cb_products")],
+                    [InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")]
+                ]
+                if is_callback:
+                    await msg.edit_message_text(
+                        "❌ *Could not load products*\n\nPlease try again.",
+                        parse_mode="Markdown",
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                else:
+                    await msg.edit_text(
+                        "❌ *Could not load products*\n\nPlease try again.",
+                        parse_mode="Markdown",
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                return
+
+            # Save products to database
+            for p in products:
+                db.upsert_product(
+                    p["id"], p["sku"], p["name"],
+                    p.get("price", 0), p.get("image_url", ""),
+                    p.get("category", ""),
+                    p.get("in_stock", False), p.get("quantity", 0)
+                )
+
+            await _display_products(msg, user, user_id, products, is_callback, from_cache=False)
 
     except Exception as e:
         logger.error(f"Error showing products: {e}")

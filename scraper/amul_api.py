@@ -151,10 +151,10 @@ class AmulAPI:
             page.on('response', handle_response)
 
             try:
-                # Go to protein page
+                # Go to protein page (OPTIMIZED: reduced timeout)
                 logger.info(f"Navigating to {config.AMUL_BASE_URL}/en/browse/protein")
-                await page.goto(f'{config.AMUL_BASE_URL}/en/browse/protein', timeout=30000)
-                await asyncio.sleep(3)
+                await page.goto(f'{config.AMUL_BASE_URL}/en/browse/protein', timeout=15000)
+                await asyncio.sleep(1)  # OPTIMIZED: 3s -> 1s
 
                 # Find and fill pincode input - try multiple selectors
                 pincode_input = None
@@ -168,7 +168,7 @@ class AmulAPI:
 
                 for selector in selectors:
                     try:
-                        pincode_input = await page.wait_for_selector(selector, timeout=3000)
+                        pincode_input = await page.wait_for_selector(selector, timeout=2000)  # OPTIMIZED: 3s -> 2s
                         if pincode_input:
                             logger.info(f"Found pincode input with selector: {selector}")
                             break
@@ -176,14 +176,14 @@ class AmulAPI:
                         continue
 
                 if pincode_input:
-                    # Clear and enter pincode
+                    # Clear and enter pincode (OPTIMIZED: faster typing)
                     logger.info(f"Entering pincode: {pincode}")
                     await pincode_input.click()
                     await pincode_input.fill('')
-                    await asyncio.sleep(0.5)
-                    await pincode_input.type(pincode, delay=100)  # Type slowly for dropdown
+                    await asyncio.sleep(0.3)  # OPTIMIZED: 0.5s -> 0.3s
+                    await pincode_input.type(pincode, delay=50)  # OPTIMIZED: 100ms -> 50ms per char
                     logger.info(f"Typed pincode, waiting for dropdown...")
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(1.5)  # OPTIMIZED: 3s -> 1.5s
 
                     # Wait for dropdown suggestions and click the matching one
                     dropdown_found = False
@@ -199,12 +199,12 @@ class AmulAPI:
 
                         for ds in dropdown_selectors:
                             try:
-                                dropdown_item = await page.wait_for_selector(ds, timeout=2000)
+                                dropdown_item = await page.wait_for_selector(ds, timeout=1500)  # OPTIMIZED: 2s -> 1.5s
                                 if dropdown_item:
                                     logger.info(f"Found dropdown with selector: {ds}")
                                     await dropdown_item.click()
                                     dropdown_found = True
-                                    await asyncio.sleep(3)
+                                    await asyncio.sleep(1)  # OPTIMIZED: 3s -> 1s
                                     break
                             except:
                                 continue
@@ -215,11 +215,11 @@ class AmulAPI:
                     if not dropdown_found:
                         logger.info("No dropdown found, pressing Enter")
                         await page.keyboard.press('Enter')
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(1)  # OPTIMIZED: 3s -> 1s
 
-                    # Wait for products to load
+                    # Wait for products to load (OPTIMIZED: reduced wait time)
                     logger.info("Waiting for products to load...")
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(2)  # OPTIMIZED: 5s -> 2s
 
                     # Log final state
                     logger.info(f"Captured {len(all_requests)} requests, {len(all_responses)} responses")

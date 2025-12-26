@@ -150,6 +150,7 @@ class StockMonitor:
         # Determine if we should notify (ONLY on actual state changes)
         should_notify = False
         notification_type = None
+        quantity_change = current_quantity - prev_quantity
 
         if current_in_stock and not prev_in_stock:
             # Product just came back in stock (was out, now in)
@@ -157,22 +158,27 @@ class StockMonitor:
             notification_type = "back_in_stock"
         elif current_in_stock and prev_in_stock and current_quantity != prev_quantity:
             # Stock quantity changed (still in stock)
-            # Notify if quantity increased significantly or dropped low
-            if current_quantity > prev_quantity:
+            # NOTIFY ON ALL CHANGES - user wants real-time updates!
+            if quantity_change > 0:
                 should_notify = True
                 notification_type = "stock_increased"
-            elif current_quantity <= 5 and prev_quantity > 5:
+            elif quantity_change < 0 and current_quantity <= 10:
+                # Stock decreased and running low
                 should_notify = True
                 notification_type = "low_stock"
+            elif quantity_change < 0:
+                # Stock decreased but still plenty available
+                should_notify = True
+                notification_type = "stock_decreased"
         elif not current_in_stock and prev_in_stock:
             # Product just went out of stock (was in, now out)
             should_notify = True
             notification_type = "sold_out"
 
         if should_notify:
-            await self._send_notification(user, product, notification_type)
+            await self._send_notification(user, product, notification_type, quantity_change)
 
-    async def _send_notification(self, user: dict, product: dict, notification_type: str):
+    async def _send_notification(self, user: dict, product: dict, notification_type: str, quantity_change: int = 0):
         """Send stock notification to user"""
         user_id = user["user_id"]
 
@@ -188,12 +194,23 @@ class StockMonitor:
                 f"_Hurry! Limited stock available._"
             )
         elif notification_type == "stock_increased":
+            change_text = f"+{quantity_change}" if quantity_change > 0 else str(quantity_change)
             message = (
                 f"📦 *STOCK UPDATE*\n\n"
                 f"*{product['name']}*\n"
-                f"More stock added!\n\n"
+                f"Stock increased! ({change_text})\n\n"
                 f"📍 Pincode: {user['pincode']}\n"
-                f"📦 New Quantity: {product['quantity']} units\n"
+                f"📦 Quantity: {product['quantity']} units\n"
+                f"💰 Price: ₹{product['price']}\n\n"
+                f"🛒 [Order Now]({product['product_url']})"
+            )
+        elif notification_type == "stock_decreased":
+            message = (
+                f"📉 *STOCK DECREASED*\n\n"
+                f"*{product['name']}*\n"
+                f"Stock reduced ({quantity_change})\n\n"
+                f"📍 Pincode: {user['pincode']}\n"
+                f"📦 Remaining: {product['quantity']} units\n"
                 f"💰 Price: ₹{product['price']}\n\n"
                 f"🛒 [Order Now]({product['product_url']})"
             )
