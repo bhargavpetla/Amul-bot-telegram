@@ -237,10 +237,25 @@ class AmulAPI:
     def search_pincode(self, pincode: str) -> Optional[dict]:
         """Search for pincode and get substore info"""
         if pincode in self._pincode_cache:
+            logger.info(f"Using cached pincode data for {pincode}")
             return self._pincode_cache[pincode]
 
         try:
             logger.info(f"Searching for pincode: {pincode}")
+
+            # STRATEGY: Try fallback FIRST for known regions (fast & reliable)
+            # Only use slow Playwright scraper if fallback doesn't match
+            fallback_data = self._get_fallback_substore(pincode)
+            if fallback_data:
+                logger.info(f"✓ Pincode {pincode} matched fallback region: {fallback_data['city']}, {fallback_data['state']}")
+                self._pincode_cache[pincode] = fallback_data
+                self.pincode = pincode
+                self.substore_id = fallback_data['substore_id']
+                self.substore_name = fallback_data['substore_name']
+                return fallback_data
+
+            # If fallback didn't match, try Playwright scraper (slower)
+            logger.info(f"No fallback match, trying browser automation for {pincode}...")
             result = self._run_async(self._enter_pincode_and_fetch(pincode))
 
             if result['pincode_info']:
@@ -255,7 +270,7 @@ class AmulAPI:
                     "state": info.get("state", "")
                 }
 
-                logger.info(f"Pincode search successful: {pincode_data}")
+                logger.info(f"✓ Playwright found pincode: {pincode_data}")
                 self._pincode_cache[pincode] = pincode_data
                 self.pincode = pincode
                 self.substore_id = pincode_data['substore_id']
@@ -268,30 +283,20 @@ class AmulAPI:
 
                 return pincode_data
 
-            # Fallback: Use regional mapping for known pincode ranges
-            logger.warning(f"No pincode info from API for {pincode}, trying fallback...")
-            fallback_data = self._get_fallback_substore(pincode)
-            if fallback_data:
-                logger.info(f"Using fallback substore for {pincode}: {fallback_data}")
-                self._pincode_cache[pincode] = fallback_data
-                self.pincode = pincode
-                self.substore_id = fallback_data['substore_id']
-                self.substore_name = fallback_data['substore_name']
-                return fallback_data
-
-            logger.warning(f"No pincode info found for {pincode}")
+            logger.warning(f"✗ Pincode {pincode} not found via API or fallback")
             return None
+
         except Exception as e:
             logger.error(f"Pincode search error for {pincode}: {e}", exc_info=True)
             return None
 
     def _get_fallback_substore(self, pincode: str) -> Optional[dict]:
-        """Get fallback substore based on pincode range"""
+        """Get fallback substore based on pincode range - covers major Indian cities"""
         try:
             pin_num = int(pincode)
 
-            # Mumbai pincodes: 400001-400104
-            if 400001 <= pin_num <= 400104:
+            # Maharashtra
+            if 400001 <= pin_num <= 400104:  # Mumbai
                 return {
                     "pincode": pincode,
                     "substore_id": self._get_substore_id('mumbai-br'),
@@ -299,8 +304,7 @@ class AmulAPI:
                     "city": "Mumbai",
                     "state": "Maharashtra"
                 }
-            # Pune pincodes: 411001-411060
-            elif 411001 <= pin_num <= 411060:
+            elif 411001 <= pin_num <= 411060:  # Pune
                 return {
                     "pincode": pincode,
                     "substore_id": self._get_substore_id('pune-br'),
@@ -308,8 +312,33 @@ class AmulAPI:
                     "city": "Pune",
                     "state": "Maharashtra"
                 }
-            # Delhi pincodes: 110001-110096
-            elif 110001 <= pin_num <= 110096:
+            elif 413001 <= pin_num <= 413736:  # Solapur
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('solapur-br'),
+                    "substore_name": "solapur-br",
+                    "city": "Solapur",
+                    "state": "Maharashtra"
+                }
+            elif 422001 <= pin_num <= 422605:  # Nashik
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('nashik-br'),
+                    "substore_name": "nashik-br",
+                    "city": "Nashik",
+                    "state": "Maharashtra"
+                }
+            elif 431001 <= pin_num <= 431542:  # Aurangabad
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('aurangabad-br'),
+                    "substore_name": "aurangabad-br",
+                    "city": "Aurangabad",
+                    "state": "Maharashtra"
+                }
+
+            # Delhi NCR
+            elif 110001 <= pin_num <= 110096:  # Delhi
                 return {
                     "pincode": pincode,
                     "substore_id": self._get_substore_id('delhi'),
@@ -317,8 +346,105 @@ class AmulAPI:
                     "city": "Delhi",
                     "state": "Delhi"
                 }
-        except:
-            pass
+            elif 201001 <= pin_num <= 203207 or 244001 <= pin_num <= 247778:  # UP NCR (Noida, Ghaziabad, etc.)
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('up-ncr'),
+                    "substore_name": "up-ncr",
+                    "city": "NCR",
+                    "state": "Uttar Pradesh"
+                }
+            elif 121001 <= pin_num <= 122505:  # Haryana (Gurgaon, Faridabad)
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('haryana'),
+                    "substore_name": "haryana",
+                    "city": "Gurgaon/Faridabad",
+                    "state": "Haryana"
+                }
+
+            # Karnataka
+            elif 560001 <= pin_num <= 560110:  # Bangalore
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('karnataka'),
+                    "substore_name": "karnataka",
+                    "city": "Bangalore",
+                    "state": "Karnataka"
+                }
+
+            # Tamil Nadu
+            elif 600001 <= pin_num <= 600126:  # Chennai
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('tamil-nadu-1'),
+                    "substore_name": "tamil-nadu-1",
+                    "city": "Chennai",
+                    "state": "Tamil Nadu"
+                }
+
+            # Telangana
+            elif 500001 <= pin_num <= 500097:  # Hyderabad
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('telangana'),
+                    "substore_name": "telangana",
+                    "city": "Hyderabad",
+                    "state": "Telangana"
+                }
+
+            # Gujarat
+            elif 380001 <= pin_num <= 382481:  # Ahmedabad
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('gujarat'),
+                    "substore_name": "gujarat",
+                    "city": "Ahmedabad",
+                    "state": "Gujarat"
+                }
+
+            # West Bengal
+            elif 700001 <= pin_num <= 700156:  # Kolkata
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('west-bengal'),
+                    "substore_name": "west-bengal",
+                    "city": "Kolkata",
+                    "state": "West Bengal"
+                }
+
+            # Rajasthan
+            elif 302001 <= pin_num <= 303807:  # Jaipur
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('rajasthan'),
+                    "substore_name": "rajasthan",
+                    "city": "Jaipur",
+                    "state": "Rajasthan"
+                }
+
+            # Kerala
+            elif 682001 <= pin_num <= 695615:  # Kerala (Kochi, Trivandrum)
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('kerala'),
+                    "substore_name": "kerala",
+                    "city": "Kerala",
+                    "state": "Kerala"
+                }
+
+            # Goa
+            elif 403001 <= pin_num <= 403806:  # Goa
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('goa'),
+                    "substore_name": "goa",
+                    "city": "Goa",
+                    "state": "Goa"
+                }
+
+        except Exception as e:
+            logger.debug(f"Fallback check failed for {pincode}: {e}")
 
         return None
 
