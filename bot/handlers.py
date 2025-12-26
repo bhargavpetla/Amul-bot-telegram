@@ -10,14 +10,40 @@ from telegram.ext import (
 )
 from database import Database
 from scraper import AmulAPI
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Conversation states
 WAITING_PINCODE = 1
-SELECTING_PRODUCTS = 2
 
 # Initialize database and API
 db = Database()
 amul_api = AmulAPI()
+
+
+def get_main_menu_keyboard(has_pincode=False):
+    """Get modern main menu keyboard"""
+    if has_pincode:
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🛒 Products", callback_data="cb_products"),
+                InlineKeyboardButton("📊 Status", callback_data="cb_mystatus")
+            ],
+            [
+                InlineKeyboardButton("📦 Check Stock", callback_data="cb_instock"),
+                InlineKeyboardButton("📍 Change Pin", callback_data="cb_setpincode")
+            ],
+            [
+                InlineKeyboardButton("❓ Help", callback_data="cb_help"),
+                InlineKeyboardButton("🔕 Stop Alerts", callback_data="cb_stop")
+            ]
+        ])
+    else:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📍 Set Pincode", callback_data="cb_setpincode")],
+            [InlineKeyboardButton("❓ Help", callback_data="cb_help")]
+        ])
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -25,61 +51,74 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.add_user(user.id, user.username, user.first_name)
 
+    existing_user = db.get_user(user.id)
+    has_pincode = existing_user and existing_user.get("pincode")
+
     welcome_message = f"""
-*Welcome to Amul Protein Stock Alert Bot!*
+╔══════════════════════════════════╗
+     🥛 *AMUL PROTEIN ALERTS* 🥛
+╚══════════════════════════════════╝
 
-Hi {user.first_name}! I'll help you get instant notifications when Amul protein products are available in your area.
+Hey *{user.first_name}*! 👋
 
-*How to use:*
-1. Set your pincode using /setpincode
-2. Select products to track using /products
-3. Get notified when they're in stock!
+I'll notify you *instantly* when Amul protein products are back in stock at your location.
 
-*Commands:*
-/setpincode - Set your delivery pincode
-/products - Select products to track
-/mystatus - View your subscriptions
-/stop - Unsubscribe from all alerts
-/help - Show this help message
+━━━━━━━━━━━━━━━━━━━━━━
+📌 *Quick Setup:*
+━━━━━━━━━━━━━━━━━━━━━━
+1️⃣  Set your delivery pincode
+2️⃣  Select products to track
+3️⃣  Get instant alerts! 🔔
 
-Let's start! Use /setpincode to set your location.
 """
+    if has_pincode:
+        welcome_message += f"✅ Your pincode: *{existing_user['pincode']}*\n\n"
+        welcome_message += "👇 *Choose an option below:*"
+    else:
+        welcome_message += "👇 *Let's start by setting your pincode:*"
 
-    # Add inline keyboard for quick options
-    keyboard = [
-        [InlineKeyboardButton("Set Pincode", callback_data="set_pincode")],
-        [InlineKeyboardButton("Select Products", callback_data="products")],
-        [InlineKeyboardButton("View Status", callback_data="mystatus")],
-        [InlineKeyboardButton("Help", callback_data="help")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
+    reply_markup = get_main_menu_keyboard(has_pincode)
     await update.message.reply_text(welcome_message, parse_mode="Markdown", reply_markup=reply_markup)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command"""
+    user = db.get_user(update.effective_user.id)
+    has_pincode = user and user.get("pincode")
+
     help_text = """
-*Amul Protein Stock Alert Bot*
+╔══════════════════════════════════╗
+          ❓ *HELP CENTER*
+╚══════════════════════════════════╝
 
-*Commands:*
-/start - Start the bot
-/setpincode - Set your delivery pincode
-/products - Browse & select products to track
-/mystatus - View your current subscriptions
-/instock - Check what's currently in stock
-/stop - Unsubscribe from all notifications
-/help - Show this help message
+*🔹 Commands:*
+┌─────────────────────────────
+│ /start - Main menu
+│ /setpincode - Set location
+│ /products - Track products
+│ /instock - Check availability
+│ /mystatus - Your subscriptions
+│ /stop - Pause notifications
+│ /help - This help menu
+└─────────────────────────────
 
-*How it works:*
-1. Set your pincode (delivery location)
-2. Choose which protein products you want to track
-3. I'll check stock every 5 minutes
-4. When your products are available, you'll get a notification with quantity!
+*🔹 How It Works:*
+━━━━━━━━━━━━━━━━━━━━━━
+1️⃣ Set your pincode
+2️⃣ Choose products to track
+3️⃣ I check stock every 30 sec
+4️⃣ Get notified when available!
 
-*Note:* Notifications continue until the product is sold out.
+*🔹 Tips:*
+• Tap buttons for quick actions
+• You can track multiple products
+• Alerts stop when items sell out
+
+━━━━━━━━━━━━━━━━━━━━━━
+💡 *Need more help?* Just send any message!
 """
-    await update.message.reply_text(help_text, parse_mode="Markdown")
+    reply_markup = get_main_menu_keyboard(has_pincode)
+    await update.message.reply_text(help_text, parse_mode="Markdown", reply_markup=reply_markup)
 
 
 async def set_pincode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,11 +126,62 @@ async def set_pincode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(update.effective_user.id)
     current_pincode = user.get("pincode") if user else None
 
-    message = "Please enter your 6-digit delivery pincode:"
     if current_pincode:
-        message = f"Your current pincode is *{current_pincode}*.\n\nEnter a new pincode to change it, or /cancel to keep current:"
+        message = f"""
+📍 *Change Pincode*
 
-    await update.message.reply_text(message, parse_mode="Markdown")
+Your current pincode: *{current_pincode}*
+
+━━━━━━━━━━━━━━━━━━━━━━
+Enter new 6-digit pincode:
+_(or /cancel to keep current)_
+"""
+    else:
+        message = """
+📍 *Set Your Pincode*
+
+━━━━━━━━━━━━━━━━━━━━━━
+Enter your 6-digit delivery pincode:
+
+_Example: 400001_
+"""
+
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cb_cancel")]]
+    await update.message.reply_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    return WAITING_PINCODE
+
+
+async def set_pincode_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start pincode setting from callback"""
+    query = update.callback_query
+    await query.answer()
+
+    user = db.get_user(query.from_user.id)
+    current_pincode = user.get("pincode") if user else None
+
+    if current_pincode:
+        message = f"""
+📍 *Change Pincode*
+
+Your current pincode: *{current_pincode}*
+
+━━━━━━━━━━━━━━━━━━━━━━
+Enter new 6-digit pincode:
+_(or tap Cancel to keep current)_
+"""
+    else:
+        message = """
+📍 *Set Your Pincode*
+
+━━━━━━━━━━━━━━━━━━━━━━
+Enter your 6-digit delivery pincode:
+
+_Example: 400001_
+"""
+
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cb_cancel")]]
+    await query.edit_message_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    context.user_data["awaiting_pincode"] = True
     return WAITING_PINCODE
 
 
@@ -101,22 +191,35 @@ async def set_pincode_receive(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Validate pincode format
     if not pincode.isdigit() or len(pincode) != 6:
+        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cb_cancel")]]
         await update.message.reply_text(
-            "Invalid pincode. Please enter a valid 6-digit pincode:"
+            "⚠️ *Invalid pincode!*\n\nPlease enter a valid 6-digit pincode:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return WAITING_PINCODE
 
-    # Search pincode on Amul
-    await update.message.reply_text("Checking pincode availability...")
+    # Show loading
+    loading_msg = await update.message.reply_text(
+        "🔍 *Checking pincode...*\n\n⏳ _Please wait..._",
+        parse_mode="Markdown"
+    )
 
     pincode_info = amul_api.search_pincode(pincode)
 
     if not pincode_info:
-        await update.message.reply_text(
-            "Sorry, Amul doesn't deliver to this pincode yet.\n"
-            "Please try a different pincode:"
+        keyboard = [
+            [InlineKeyboardButton("🔄 Try Again", callback_data="cb_setpincode")],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")]
+        ]
+        await loading_msg.edit_text(
+            f"❌ *Pincode Not Available*\n\n"
+            f"Sorry, Amul doesn't deliver to *{pincode}* yet.\n\n"
+            f"Try a different pincode.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        return WAITING_PINCODE
+        return ConversationHandler.END
 
     # Save to database
     db.update_user_pincode(
@@ -126,21 +229,66 @@ async def set_pincode_receive(update: Update, context: ContextTypes.DEFAULT_TYPE
         pincode_info["substore_name"]
     )
 
-    await update.message.reply_text(
-        f"✅ *Pincode set successfully!*\n\n"
-        f"📍 *Pincode:* {pincode_info['pincode']}\n"
-        f"🏪 *Store:* {pincode_info['substore_name']}\n"
-        f"🏙️ *City:* {pincode_info.get('city', 'N/A')}\n\n"
-        f"*Next Step:*\n"
-        f"Use /products to select which protein products you want to track!",
-        parse_mode="Markdown"
+    context.user_data["awaiting_pincode"] = False
+
+    # Success message with next step buttons
+    keyboard = [
+        [InlineKeyboardButton("🛒 Select Products Now", callback_data="cb_products")],
+        [InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")]
+    ]
+
+    city = pincode_info.get('city', '')
+    state = pincode_info.get('state', '')
+    location = f"{city}, {state}" if city and state else pincode_info.get('substore_name', 'Available')
+
+    await loading_msg.edit_text(
+        f"""
+✅ *Pincode Set Successfully!*
+
+━━━━━━━━━━━━━━━━━━━━━━
+📍 *Pincode:* `{pincode_info['pincode']}`
+🏪 *Area:* {location}
+━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 *Next Step:*
+Select products you want to track!
+
+👇 *Tap the button below:*
+""",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel conversation"""
-    await update.message.reply_text("Cancelled. Use /help to see available commands.")
+    context.user_data["awaiting_pincode"] = False
+    user = db.get_user(update.effective_user.id)
+    has_pincode = user and user.get("pincode")
+
+    await update.message.reply_text(
+        "❌ *Cancelled*\n\nChoose an option below:",
+        parse_mode="Markdown",
+        reply_markup=get_main_menu_keyboard(has_pincode)
+    )
+    return ConversationHandler.END
+
+
+async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel from callback"""
+    query = update.callback_query
+    await query.answer("Cancelled")
+
+    context.user_data["awaiting_pincode"] = False
+    user = db.get_user(query.from_user.id)
+    has_pincode = user and user.get("pincode")
+
+    await query.edit_message_text(
+        "❌ *Cancelled*\n\nChoose an option below:",
+        parse_mode="Markdown",
+        reply_markup=get_main_menu_keyboard(has_pincode)
+    )
     return ConversationHandler.END
 
 
@@ -149,98 +297,159 @@ async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(update.effective_user.id)
 
     if not user or not user.get("pincode"):
+        keyboard = [[InlineKeyboardButton("📍 Set Pincode First", callback_data="cb_setpincode")]]
         await update.message.reply_text(
-            "Please set your pincode first using /setpincode"
+            "⚠️ *Pincode Required*\n\nPlease set your pincode first!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
 
-    # Show loading message
     loading_msg = await update.message.reply_text(
-        "⏳ *Fetching available products...*\n\n_This may take 10-15 seconds_",
+        "🔄 *Loading Products...*\n\n⏳ _Fetching latest stock data..._",
         parse_mode="Markdown"
     )
 
+    await _show_products_list(loading_msg, user, update.effective_user.id, context)
+
+
+async def show_products_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show products from callback"""
+    query = update.callback_query
+    await query.answer()
+
+    user = db.get_user(query.from_user.id)
+
+    if not user or not user.get("pincode"):
+        keyboard = [[InlineKeyboardButton("📍 Set Pincode First", callback_data="cb_setpincode")]]
+        await query.edit_message_text(
+            "⚠️ *Pincode Required*\n\nPlease set your pincode first!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    await query.edit_message_text(
+        "🔄 *Loading Products...*\n\n⏳ _Fetching latest stock data..._",
+        parse_mode="Markdown"
+    )
+
+    await _show_products_list(query, user, query.from_user.id, context, is_callback=True)
+
+
+async def _show_products_list(msg, user, user_id, context, is_callback=False):
+    """Helper to show products list"""
     try:
-        # Get products from Amul
+        amul_api.set_pincode(user["pincode"], user["substore_id"])
         products = amul_api.get_protein_products(user["substore_id"])
 
         if not products:
-            await loading_msg.edit_text(
-                "❌ Could not fetch products. Please try again later."
-            )
+            keyboard = [
+                [InlineKeyboardButton("🔄 Retry", callback_data="cb_products")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")]
+            ]
+            if is_callback:
+                await msg.edit_message_text(
+                    "❌ *Could not load products*\n\nPlease try again.",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                await msg.edit_text(
+                    "❌ *Could not load products*\n\nPlease try again.",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
             return
 
-        # Save products to database - CRITICAL: must save before checking subscriptions
+        # Save products to database
         for p in products:
             db.upsert_product(
-                p["id"],
-                p["sku"],
-                p["name"],
-                p.get("price", 0),
-                p.get("image_url", ""),
+                p["id"], p["sku"], p["name"],
+                p.get("price", 0), p.get("image_url", ""),
                 p.get("category", ""),
-                p.get("in_stock", False),  # Save stock status
-                p.get("quantity", 0)        # Save quantity
+                p.get("in_stock", False), p.get("quantity", 0)
             )
 
-        # Store products in context for fast UI updates
         context.user_data["products_cache"] = products
 
-        # Get user's current subscriptions
-        subscriptions = db.get_user_subscriptions(update.effective_user.id)
+        subscriptions = db.get_user_subscriptions(user_id)
         subscribed_skus = [s["product_sku"] for s in subscriptions]
 
-        # Create inline keyboard with products
+        # Create modern keyboard
         keyboard = []
         for product in products:
-            status = "✅" if product["sku"] in subscribed_skus else "⬜"
-            stock_status = "🟢" if product["in_stock"] else "🔴"
-            btn_text = f"{status} {product['name'][:30]} {stock_status}"
+            is_subscribed = product["sku"] in subscribed_skus
+            is_in_stock = product.get("in_stock", False)
+
+            # Modern status indicators
+            sub_icon = "✅" if is_subscribed else "⬜"
+            stock_icon = "🟢" if is_in_stock else "🔴"
+
+            name = product['name'][:28]
+            btn_text = f"{sub_icon} {name} {stock_icon}"
+
             keyboard.append([
-                InlineKeyboardButton(
-                    btn_text,
-                    callback_data=f"toggle_{product['sku']}"
-                )
+                InlineKeyboardButton(btn_text, callback_data=f"toggle_{product['sku']}")
             ])
 
+        # Add action buttons
         keyboard.append([
-            InlineKeyboardButton("✅ Done", callback_data="products_done")
+            InlineKeyboardButton("✅ Save & Continue", callback_data="products_done"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="cb_products")
+        ])
+        keyboard.append([
+            InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")
         ])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Replace loading message with product list
-        await loading_msg.edit_text(
-            "*✅ Select products to track:*\n\n"
-            "✅ = Subscribed | ⬜ = Not subscribed\n"
-            "🟢 = In Stock | 🔴 = Out of Stock\n\n"
-            "_Tap a product to toggle subscription_",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
+        message = f"""
+╔══════════════════════════════════╗
+        🛒 *SELECT PRODUCTS*
+╚══════════════════════════════════╝
+
+📍 Pincode: *{user['pincode']}*
+
+━━━━━━━━━━━━━━━━━━━━━━
+✅ = Tracking  │  ⬜ = Not tracking
+🟢 = In Stock  │  🔴 = Out of Stock
+━━━━━━━━━━━━━━━━━━━━━━
+
+👆 _Tap a product to toggle tracking_
+"""
+
+        if is_callback:
+            await msg.edit_message_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+        else:
+            await msg.edit_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+
     except Exception as e:
-        await loading_msg.edit_text(
-            f"❌ Error loading products: {str(e)}\n\nPlease try again."
-        )
+        logger.error(f"Error showing products: {e}")
+        keyboard = [
+            [InlineKeyboardButton("🔄 Retry", callback_data="cb_products")],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")]
+        ]
+        error_msg = f"❌ *Error loading products*\n\n_{str(e)[:100]}_"
+        if is_callback:
+            await msg.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await msg.edit_text(error_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def handle_product_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle product subscription toggle"""
     query = update.callback_query
-    await query.answer()  # Instant acknowledgment without text
+    await query.answer("Updating...", show_alert=False)
 
     data = query.data
 
     if data == "products_done":
         subscriptions = db.get_user_subscriptions(query.from_user.id)
+
         if subscriptions:
-            # Get cached products to show current stock status
             cached_products = context.user_data.get("products_cache", [])
             stock_by_sku = {p["sku"]: p for p in cached_products}
-
-            # Build message with stock status
-            message = "*✅ Your subscriptions saved!*\n\n"
-            message += f"*Current Stock Status:*\n\n"
 
             in_stock_items = []
             out_stock_items = []
@@ -248,75 +457,99 @@ async def handle_product_toggle(update: Update, context: ContextTypes.DEFAULT_TY
             for sub in subscriptions:
                 sku = sub["product_sku"]
                 product = stock_by_sku.get(sku)
+                name = sub.get('name', sub.get('product_name', 'Unknown'))[:25]
 
-                if product:
-                    if product.get("in_stock", False):
-                        in_stock_items.append(f"🟢 {sub['name']} - Qty: {product.get('quantity', 0)}")
-                    else:
-                        out_stock_items.append(f"🔴 {sub['name']} - Out of stock")
+                if product and product.get("in_stock", False):
+                    qty = product.get('quantity', 0)
+                    in_stock_items.append(f"🟢 {name} (Qty: {qty})")
                 else:
-                    out_stock_items.append(f"⚠️ {sub['name']} - Status unknown")
+                    out_stock_items.append(f"🔴 {name}")
 
+            message = """
+╔══════════════════════════════════╗
+      ✅ *SUBSCRIPTIONS SAVED*
+╚══════════════════════════════════╝
+
+"""
             if in_stock_items:
+                message += "*🟢 In Stock Now:*\n"
                 message += "\n".join(in_stock_items) + "\n\n"
+
             if out_stock_items:
+                message += "*🔴 Out of Stock:*\n"
                 message += "\n".join(out_stock_items) + "\n\n"
 
-            message += f"🔔 *Monitoring {len(subscriptions)} product(s)*\n\n"
-            message += f"*Next Steps:*\n"
-            message += f"• Use /mystatus to view subscriptions\n"
-            message += f"• Use /instock for updated availability\n"
-            message += f"• I'll check stock every 30 seconds and alert you when status changes!"
+            message += f"""━━━━━━━━━━━━━━━━━━━━━━
+🔔 *Tracking {len(subscriptions)} product(s)*
 
-            await query.edit_message_text(message, parse_mode="Markdown")
+⚡ I'll check every 30 seconds
+📲 You'll get instant alerts!
+"""
+
+            keyboard = [
+                [
+                    InlineKeyboardButton("📦 Check Stock", callback_data="cb_instock"),
+                    InlineKeyboardButton("📊 My Status", callback_data="cb_mystatus")
+                ],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")]
+            ]
+
+            await query.edit_message_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         else:
+            keyboard = [
+                [InlineKeyboardButton("🛒 Select Products", callback_data="cb_products")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")]
+            ]
             await query.edit_message_text(
-                "⚠️ No products selected.\n\nUse /products to select products to track."
+                "⚠️ *No Products Selected*\n\nYou need to select at least one product to track.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
         return
 
     if data.startswith("toggle_"):
         sku = data.replace("toggle_", "")
         user_id = query.from_user.id
+        user = db.get_user(user_id)
 
-        # Store in context to avoid re-fetching products
         if "products_cache" not in context.user_data:
-            # Fallback: get from DB if not in context
             context.user_data["products_cache"] = db.get_all_products()
 
         cached_products = context.user_data["products_cache"]
-
-        # Check current subscription status - single query
         subscriptions = db.get_user_subscriptions(user_id)
         subscribed_skus = [s["product_sku"] for s in subscriptions]
 
-        # Quick toggle - just update DB, no re-fetch
+        # Toggle subscription
         if sku in subscribed_skus:
             db.remove_subscription(user_id, sku)
             subscribed_skus.remove(sku)
         else:
             db.add_subscription(user_id, sku)
             db.set_user_active(user_id, True)
-            # Mark this subscription as "just added" to prevent immediate alert
-            context.user_data[f"new_subscription_{sku}"] = True
             subscribed_skus.append(sku)
 
-        # Rebuild keyboard using CACHED products (no DB query)
+        # Rebuild keyboard
         keyboard = []
         for product in cached_products:
-            status = "✅" if product["sku"] in subscribed_skus else "⬜"
-            in_stock = product.get("in_stock", 0) > 0
-            stock_status = "🟢" if in_stock else "🔴"
-            btn_text = f"{status} {product['name'][:30]} {stock_status}"
+            is_subscribed = product["sku"] in subscribed_skus
+            is_in_stock = product.get("in_stock", False)
+
+            sub_icon = "✅" if is_subscribed else "⬜"
+            stock_icon = "🟢" if is_in_stock else "🔴"
+
+            name = product['name'][:28]
+            btn_text = f"{sub_icon} {name} {stock_icon}"
+
             keyboard.append([
-                InlineKeyboardButton(
-                    btn_text,
-                    callback_data=f"toggle_{product['sku']}"
-                )
+                InlineKeyboardButton(btn_text, callback_data=f"toggle_{product['sku']}")
             ])
 
         keyboard.append([
-            InlineKeyboardButton("✅ Done", callback_data="products_done")
+            InlineKeyboardButton("✅ Save & Continue", callback_data="products_done"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="cb_products")
+        ])
+        keyboard.append([
+            InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")
         ])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -324,101 +557,220 @@ async def handle_product_toggle(update: Update, context: ContextTypes.DEFAULT_TY
         try:
             await query.edit_message_reply_markup(reply_markup=reply_markup)
         except Exception:
-            # Fallback: edit full message if reply_markup edit fails
-            await query.edit_message_text(
-                "*✅ Select products to track:*\n\n"
-                "✅ = Subscribed | ⬜ = Not subscribed\n"
-                "🟢 = In Stock | 🔴 = Out of Stock\n\n"
-                "_Tap a product to toggle subscription_",
-                reply_markup=reply_markup,
-                parse_mode="Markdown"
-            )
+            pass
 
 
 async def my_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user's current status and subscriptions"""
-    user = db.get_user(update.effective_user.id)
+    """Show user's current status"""
+    await _show_status(update.message, update.effective_user.id)
+
+
+async def my_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show status from callback"""
+    query = update.callback_query
+    await query.answer()
+    await _show_status(query, query.from_user.id, is_callback=True)
+
+
+async def _show_status(msg, user_id, is_callback=False):
+    """Helper to show status"""
+    user = db.get_user(user_id)
 
     if not user:
-        await update.message.reply_text(
-            "You haven't set up your account yet. Use /start to begin."
-        )
+        keyboard = [[InlineKeyboardButton("🚀 Get Started", callback_data="cb_start")]]
+        text = "⚠️ *Not Registered*\n\nTap below to get started!"
+        if is_callback:
+            await msg.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await msg.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    subscriptions = db.get_user_subscriptions(update.effective_user.id)
+    subscriptions = db.get_user_subscriptions(user_id)
+
+    status_icon = "✅ Active" if user.get('is_active') else "⏸️ Paused"
 
     status_text = f"""
-📊 *Your Status*
+╔══════════════════════════════════╗
+         📊 *YOUR STATUS*
+╚══════════════════════════════════╝
 
-📍 *Pincode:* {user.get('pincode', 'Not set')}
-🏪 *Store:* {user.get('substore_name', 'Not set')}
-🔔 *Notifications:* {'✅ Active' if user.get('is_active') else '⏸️ Paused'}
+*📍 Location:*
+┌─────────────────────────────
+│ Pincode: `{user.get('pincode', 'Not set')}`
+│ Area: {user.get('substore_name', 'Not set')}
+└─────────────────────────────
 
-*Tracked Products ({len(subscriptions)}):*
+*🔔 Notifications:* {status_icon}
+
+*🛒 Tracked Products ({len(subscriptions)}):*
 """
+
     if subscriptions:
-        for sub in subscriptions:
-            status_text += f"• {sub['name']} (₹{sub.get('price', 'N/A')})\n"
+        for i, sub in enumerate(subscriptions, 1):
+            name = sub.get('name', sub.get('product_name', 'Unknown'))[:30]
+            price = sub.get('price', 'N/A')
+            status_text += f"│ {i}. {name}\n│    ₹{price}\n"
     else:
-        status_text += "_No products selected_\n"
+        status_text += "│ _No products selected_\n"
 
-    status_text += f"\n*Next Steps:*\n"
-    status_text += f"• /products - Modify tracked products\n"
-    status_text += f"• /instock - Check current availability\n"
-    status_text += f"• I check stock every 30 seconds!"
+    status_text += """
+━━━━━━━━━━━━━━━━━━━━━━
+"""
 
-    await update.message.reply_text(status_text, parse_mode="Markdown")
+    keyboard = [
+        [
+            InlineKeyboardButton("🛒 Products", callback_data="cb_products"),
+            InlineKeyboardButton("📦 Stock", callback_data="cb_instock")
+        ],
+        [InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")]
+    ]
+
+    if is_callback:
+        await msg.edit_message_text(status_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await msg.reply_text(status_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def check_instock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check what's currently in stock"""
-    user = db.get_user(update.effective_user.id)
+    loading_msg = await update.message.reply_text(
+        "📦 *Checking Stock...*\n\n⏳ _Fetching live data..._",
+        parse_mode="Markdown"
+    )
+    await _check_stock(loading_msg, update.effective_user.id, context)
+
+
+async def check_instock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check stock from callback"""
+    query = update.callback_query
+    await query.answer()
+
+    await query.edit_message_text(
+        "📦 *Checking Stock...*\n\n⏳ _Fetching live data..._",
+        parse_mode="Markdown"
+    )
+    await _check_stock(query, query.from_user.id, context, is_callback=True)
+
+
+async def _check_stock(msg, user_id, context, is_callback=False):
+    """Helper to check stock"""
+    user = db.get_user(user_id)
 
     if not user or not user.get("pincode"):
-        await update.message.reply_text(
-            "Please set your pincode first using /setpincode"
-        )
+        keyboard = [[InlineKeyboardButton("📍 Set Pincode", callback_data="cb_setpincode")]]
+        text = "⚠️ *Pincode Required*\n\nPlease set your pincode first!"
+        if is_callback:
+            await msg.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await msg.edit_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    await update.message.reply_text("Checking current stock...")
+    try:
+        amul_api.set_pincode(user["pincode"], user["substore_id"])
+        products = amul_api.get_in_stock_products(user["substore_id"])
 
-    products = amul_api.get_in_stock_products(user["substore_id"])
+        keyboard = [
+            [
+                InlineKeyboardButton("🔄 Refresh", callback_data="cb_instock"),
+                InlineKeyboardButton("🛒 Track", callback_data="cb_products")
+            ],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")]
+        ]
 
-    if not products:
-        await update.message.reply_text(
-            "No protein products are currently in stock at your location.\n"
-            "Use /products to subscribe for notifications when they're available!"
-        )
-        return
+        if not products:
+            text = f"""
+╔══════════════════════════════════╗
+         📦 *STOCK STATUS*
+╚══════════════════════════════════╝
 
-    message = f"*🟢 Products In Stock at {user['pincode']}:*\n\n"
-    for p in products:
-        message += f"• *{p['name']}*\n"
-        message += f"  💰 Price: ₹{p['price']} | 📦 Qty: {p['quantity']}\n"
-        message += f"  🛒 [Order Now]({p['product_url']})\n\n"
+📍 Pincode: *{user['pincode']}*
 
-    message += f"\n*Next Steps:*\n"
-    message += f"• Use /products to track these items\n"
-    message += f"• I'll alert you when stock changes!"
+━━━━━━━━━━━━━━━━━━━━━━
+🔴 *All products out of stock*
 
-    await update.message.reply_text(message, parse_mode="Markdown", disable_web_page_preview=True)
+Don't worry! I'll notify you
+instantly when they're available.
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+            if is_callback:
+                await msg.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                await msg.edit_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+
+        message = f"""
+╔══════════════════════════════════╗
+         📦 *STOCK STATUS*
+╚══════════════════════════════════╝
+
+📍 Pincode: *{user['pincode']}*
+
+━━━━━━━━━━━━━━━━━━━━━━
+🟢 *{len(products)} Product(s) In Stock:*
+━━━━━━━━━━━━━━━━━━━━━━
+
+"""
+        for p in products:
+            message += f"""┌─────────────────────────────
+│ *{p['name'][:30]}*
+│ 💰 ₹{p['price']} │ 📦 Qty: {p['quantity']}
+│ 🛒 [Order Now]({p['product_url']})
+└─────────────────────────────
+
+"""
+
+        if is_callback:
+            await msg.edit_message_text(message, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await msg.edit_text(message, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=InlineKeyboardMarkup(keyboard))
+
+    except Exception as e:
+        logger.error(f"Stock check error: {e}")
+        keyboard = [
+            [InlineKeyboardButton("🔄 Retry", callback_data="cb_instock")],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="cb_start")]
+        ]
+        text = "❌ *Error checking stock*\n\nPlease try again."
+        if is_callback:
+            await msg.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await msg.edit_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def stop_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stop all notifications"""
-    user_id = update.effective_user.id
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Yes, Stop All", callback_data="confirm_stop"),
+            InlineKeyboardButton("❌ No, Keep", callback_data="cancel_stop")
+        ]
+    ]
+    await update.message.reply_text(
+        "⚠️ *Stop Notifications?*\n\n"
+        "This will unsubscribe you from all product alerts.\n\n"
+        "Are you sure?",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def stop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stop from callback"""
+    query = update.callback_query
+    await query.answer()
 
     keyboard = [
         [
-            InlineKeyboardButton("Yes, unsubscribe all", callback_data="confirm_stop"),
-            InlineKeyboardButton("No, keep them", callback_data="cancel_stop")
+            InlineKeyboardButton("✅ Yes, Stop", callback_data="confirm_stop"),
+            InlineKeyboardButton("❌ No, Keep", callback_data="cancel_stop")
         ]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        "Are you sure you want to unsubscribe from all notifications?",
-        reply_markup=reply_markup
+    await query.edit_message_text(
+        "⚠️ *Stop Notifications?*\n\n"
+        "This will unsubscribe you from all product alerts.\n\n"
+        "Are you sure?",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
@@ -430,87 +782,94 @@ async def handle_stop_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
     if query.data == "confirm_stop":
         db.clear_user_subscriptions(query.from_user.id)
         db.set_user_active(query.from_user.id, False)
+
+        keyboard = [[InlineKeyboardButton("🚀 Start Again", callback_data="cb_start")]]
         await query.edit_message_text(
-            "You have been unsubscribed from all notifications.\n"
-            "Use /start to subscribe again anytime!"
+            "✅ *Notifications Stopped*\n\n"
+            "You've been unsubscribed from all alerts.\n\n"
+            "Tap below to start again anytime!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     else:
+        user = db.get_user(query.from_user.id)
+        has_pincode = user and user.get("pincode")
         await query.edit_message_text(
-            "Your subscriptions remain active."
+            "✅ *Notifications Active*\n\n"
+            "Your subscriptions remain active.",
+            parse_mode="Markdown",
+            reply_markup=get_main_menu_keyboard(has_pincode)
         )
 
 
-async def show_sidebar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show sidebar with options"""
-    keyboard = [
-        [InlineKeyboardButton("Set Pincode", callback_data="set_pincode")],
-        [InlineKeyboardButton("Select Products", callback_data="products")],
-        [InlineKeyboardButton("View Status", callback_data="mystatus")],
-        [InlineKeyboardButton("Help", callback_data="help")],
-        [InlineKeyboardButton("Stop Notifications", callback_data="stop")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all navigation callbacks"""
+    query = update.callback_query
+    data = query.data
+
+    # Route to appropriate handler
+    if data == "cb_start":
+        await query.answer()
+        user = db.get_user(query.from_user.id)
+        has_pincode = user and user.get("pincode")
+
+        welcome = f"""
+╔══════════════════════════════════╗
+     🥛 *AMUL PROTEIN ALERTS* 🥛
+╚══════════════════════════════════╝
+
+"""
+        if has_pincode:
+            welcome += f"📍 Pincode: *{user['pincode']}*\n\n"
+        welcome += "👇 *Choose an option:*"
+
+        await query.edit_message_text(
+            welcome,
+            parse_mode="Markdown",
+            reply_markup=get_main_menu_keyboard(has_pincode)
+        )
+
+    elif data == "cb_help":
+        await query.answer()
+        user = db.get_user(query.from_user.id)
+        has_pincode = user and user.get("pincode")
+
+        help_text = """
+╔══════════════════════════════════╗
+          ❓ *HELP CENTER*
+╚══════════════════════════════════╝
+
+*🔹 How It Works:*
+1️⃣ Set your pincode
+2️⃣ Choose products to track
+3️⃣ I check stock every 30 sec
+4️⃣ Get notified when available!
+
+*🔹 Tips:*
+• Tap buttons for quick actions
+• You can track multiple products
+"""
+        await query.edit_message_text(
+            help_text,
+            parse_mode="Markdown",
+            reply_markup=get_main_menu_keyboard(has_pincode)
+        )
+
+
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text messages - check if awaiting pincode"""
+    if context.user_data.get("awaiting_pincode"):
+        return await set_pincode_receive(update, context)
+
+    # Default response
+    user = db.get_user(update.effective_user.id)
+    has_pincode = user and user.get("pincode")
 
     await update.message.reply_text(
-        "*Sidebar Options:*\n\nChoose an action:",
+        "👋 *Need help?*\n\nUse the buttons below or type /help",
         parse_mode="Markdown",
-        reply_markup=reply_markup
+        reply_markup=get_main_menu_keyboard(has_pincode)
     )
-
-
-async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /instock command or button to check current stock status."""
-    user_id = update.effective_user.id
-    user = db.get_user(user_id)
-
-    if not user or not user.get("pincode"):
-        await update.message.reply_text(
-            "You need to set your pincode first using /setpincode.",
-            parse_mode="Markdown"
-        )
-        return
-
-    subscriptions = db.get_user_subscriptions(user_id)
-    if not subscriptions:
-        await update.message.reply_text(
-            "You are not tracking any products. Use /products to select products to track.",
-            parse_mode="Markdown"
-        )
-        return
-
-    # Send an animation or loading message
-    loading_message = await update.message.reply_text(
-        "Checking stock status... This may take a few seconds. 🕒",
-        parse_mode="Markdown"
-    )
-
-    amul_api.init_session()
-    products = amul_api.get_protein_products(user["substore_id"])
-
-    if not products:
-        await loading_message.edit_text(
-            "Unable to fetch stock data at the moment. Please try again later.",
-            parse_mode="Markdown"
-        )
-        return
-
-    stock_by_sku = {p["sku"]: p for p in products}
-    status_message = "*Your Tracked Products Stock Status:*\n\n"
-
-    for sub in subscriptions:
-        sku = sub["product_sku"]
-        product = stock_by_sku.get(sku)
-        if product and product["in_stock"]:
-            status_message += (
-                f"🟢 *{product['name']}*\n"
-                f"Quantity: {product['quantity']}\n"
-                f"Price: ₹{product['price']}\n"
-                f"[Order Now]({product['product_url']})\n\n"
-            )
-        else:
-            status_message += f"🔴 *{sub['product_name']}* is out of stock.\n\n"
-
-    await loading_message.edit_text(status_message, parse_mode="Markdown", disable_web_page_preview=True)
 
 
 def setup_handlers(application: Application):
@@ -518,16 +877,24 @@ def setup_handlers(application: Application):
 
     # Pincode conversation handler
     pincode_conv = ConversationHandler(
-        entry_points=[CommandHandler("setpincode", set_pincode_start)],
+        entry_points=[
+            CommandHandler("setpincode", set_pincode_start),
+            CallbackQueryHandler(set_pincode_start_callback, pattern="^cb_setpincode$")
+        ],
         states={
             WAITING_PINCODE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, set_pincode_receive)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, set_pincode_receive),
+                CallbackQueryHandler(cancel_callback, pattern="^cb_cancel$")
             ]
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(cancel_callback, pattern="^cb_cancel$")
+        ],
+        per_message=False
     )
 
-    # Add handlers
+    # Add handlers in order
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(pincode_conv)
@@ -535,8 +902,15 @@ def setup_handlers(application: Application):
     application.add_handler(CommandHandler("mystatus", my_status))
     application.add_handler(CommandHandler("instock", check_instock))
     application.add_handler(CommandHandler("stop", stop_notifications))
-    application.add_handler(CommandHandler("instock", check_status))
 
     # Callback query handlers
     application.add_handler(CallbackQueryHandler(handle_product_toggle, pattern="^toggle_|^products_done$"))
     application.add_handler(CallbackQueryHandler(handle_stop_confirm, pattern="^confirm_stop$|^cancel_stop$"))
+    application.add_handler(CallbackQueryHandler(show_products_callback, pattern="^cb_products$"))
+    application.add_handler(CallbackQueryHandler(my_status_callback, pattern="^cb_mystatus$"))
+    application.add_handler(CallbackQueryHandler(check_instock_callback, pattern="^cb_instock$"))
+    application.add_handler(CallbackQueryHandler(stop_callback, pattern="^cb_stop$"))
+    application.add_handler(CallbackQueryHandler(handle_callback, pattern="^cb_start$|^cb_help$"))
+
+    # Text message handler (for pincode input and general messages)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
