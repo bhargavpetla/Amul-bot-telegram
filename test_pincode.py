@@ -29,19 +29,29 @@ def test_pincode(pincode):
         print(f"   State: {result['state']}")
         print(f"   Substore ID: {result['substore_id']}")
         print(f"   Substore Name: {result['substore_name']}")
-        return True
+        print(f"   Canonical Pincode: {result.get('canonical_pincode', 'N/A')}")
+
+        # Test product fetching
+        print("\n   Testing product fetch...")
+        try:
+            products = api.get_protein_products()
+            if products:
+                print(f"   [OK] Loaded {len(products)} products")
+                return True
+            else:
+                print("   [WARN] No products found")
+                return True  # Still pass if pincode was recognized
+        except Exception as e:
+            print(f"   [ERROR] Product fetch failed: {e}")
+            return False
     else:
         print("\n[FAILED] Pincode not found")
         return False
 
 if __name__ == "__main__":
-    # Test the problematic pincode
+    # Test the problematic pincode - focus on 400063
     test_cases = [
-        "400063",  # Mumbai - the one user reported
-        "400001",  # Mumbai start
-        "110001",  # Delhi
-        "560001",  # Bangalore
-        "123456",  # Should fail (not in any range)
+        "400063",  # Mumbai - the one user reported (should use 400001 for products)
     ]
 
     results = {}

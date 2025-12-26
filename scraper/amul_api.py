@@ -60,6 +60,7 @@ class AmulAPI:
         self.substore_id = None
         self.substore_name = None
         self.pincode = None
+        self.canonical_pincode = None  # Pincode to use for fetching products
         self._products_cache = {}
         self._pincode_cache = {}
 
@@ -252,6 +253,9 @@ class AmulAPI:
                 self.pincode = pincode
                 self.substore_id = fallback_data['substore_id']
                 self.substore_name = fallback_data['substore_name']
+                # Use canonical pincode for product fetching (e.g., 400001 instead of 400063)
+                self.canonical_pincode = fallback_data.get('canonical_pincode', pincode)
+                logger.info(f"Using canonical pincode {self.canonical_pincode} for product fetching")
                 return fallback_data
 
             # If fallback didn't match, try Playwright scraper (slower)
@@ -275,6 +279,7 @@ class AmulAPI:
                 self.pincode = pincode
                 self.substore_id = pincode_data['substore_id']
                 self.substore_name = pincode_data['substore_name']
+                self.canonical_pincode = pincode  # Use actual pincode from API
 
                 # Also cache products if we got them
                 if result['products']:
@@ -302,7 +307,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('mumbai-br'),
                     "substore_name": "mumbai-br",
                     "city": "Mumbai",
-                    "state": "Maharashtra"
+                    "state": "Maharashtra",
+                    "canonical_pincode": "400001"  # Use this for fetching products
                 }
             elif 411001 <= pin_num <= 411060:  # Pune
                 return {
@@ -310,7 +316,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('pune-br'),
                     "substore_name": "pune-br",
                     "city": "Pune",
-                    "state": "Maharashtra"
+                    "state": "Maharashtra",
+                    "canonical_pincode": "411001"
                 }
             elif 413001 <= pin_num <= 413736:  # Solapur
                 return {
@@ -318,7 +325,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('solapur-br'),
                     "substore_name": "solapur-br",
                     "city": "Solapur",
-                    "state": "Maharashtra"
+                    "state": "Maharashtra",
+                    "canonical_pincode": "413001"
                 }
             elif 422001 <= pin_num <= 422605:  # Nashik
                 return {
@@ -326,7 +334,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('nashik-br'),
                     "substore_name": "nashik-br",
                     "city": "Nashik",
-                    "state": "Maharashtra"
+                    "state": "Maharashtra",
+                    "canonical_pincode": "422001"
                 }
             elif 431001 <= pin_num <= 431542:  # Aurangabad
                 return {
@@ -334,7 +343,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('aurangabad-br'),
                     "substore_name": "aurangabad-br",
                     "city": "Aurangabad",
-                    "state": "Maharashtra"
+                    "state": "Maharashtra",
+                    "canonical_pincode": "431001"
                 }
 
             # Delhi NCR
@@ -344,7 +354,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('delhi'),
                     "substore_name": "delhi",
                     "city": "Delhi",
-                    "state": "Delhi"
+                    "state": "Delhi",
+                    "canonical_pincode": "110001"
                 }
             elif 201001 <= pin_num <= 203207 or 244001 <= pin_num <= 247778:  # UP NCR (Noida, Ghaziabad, etc.)
                 return {
@@ -352,7 +363,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('up-ncr'),
                     "substore_name": "up-ncr",
                     "city": "NCR",
-                    "state": "Uttar Pradesh"
+                    "state": "Uttar Pradesh",
+                    "canonical_pincode": "201001"
                 }
             elif 121001 <= pin_num <= 122505:  # Haryana (Gurgaon, Faridabad)
                 return {
@@ -360,7 +372,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('haryana'),
                     "substore_name": "haryana",
                     "city": "Gurgaon/Faridabad",
-                    "state": "Haryana"
+                    "state": "Haryana",
+                    "canonical_pincode": "122001"
                 }
 
             # Karnataka
@@ -370,7 +383,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('karnataka'),
                     "substore_name": "karnataka",
                     "city": "Bangalore",
-                    "state": "Karnataka"
+                    "state": "Karnataka",
+                    "canonical_pincode": "560001"
                 }
 
             # Tamil Nadu
@@ -380,7 +394,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('tamil-nadu-1'),
                     "substore_name": "tamil-nadu-1",
                     "city": "Chennai",
-                    "state": "Tamil Nadu"
+                    "state": "Tamil Nadu",
+                    "canonical_pincode": "600001"
                 }
 
             # Telangana
@@ -390,7 +405,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('telangana'),
                     "substore_name": "telangana",
                     "city": "Hyderabad",
-                    "state": "Telangana"
+                    "state": "Telangana",
+                    "canonical_pincode": "500001"
                 }
 
             # Gujarat
@@ -400,7 +416,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('gujarat'),
                     "substore_name": "gujarat",
                     "city": "Ahmedabad",
-                    "state": "Gujarat"
+                    "state": "Gujarat",
+                    "canonical_pincode": "380001"
                 }
 
             # West Bengal
@@ -410,7 +427,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('west-bengal'),
                     "substore_name": "west-bengal",
                     "city": "Kolkata",
-                    "state": "West Bengal"
+                    "state": "West Bengal",
+                    "canonical_pincode": "700001"
                 }
 
             # Rajasthan
@@ -420,7 +438,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('rajasthan'),
                     "substore_name": "rajasthan",
                     "city": "Jaipur",
-                    "state": "Rajasthan"
+                    "state": "Rajasthan",
+                    "canonical_pincode": "302001"
                 }
 
             # Kerala
@@ -430,7 +449,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('kerala'),
                     "substore_name": "kerala",
                     "city": "Kerala",
-                    "state": "Kerala"
+                    "state": "Kerala",
+                    "canonical_pincode": "695001"
                 }
 
             # Goa
@@ -440,7 +460,8 @@ class AmulAPI:
                     "substore_id": self._get_substore_id('goa'),
                     "substore_name": "goa",
                     "city": "Goa",
-                    "state": "Goa"
+                    "state": "Goa",
+                    "canonical_pincode": "403001"
                 }
 
         except Exception as e:
@@ -450,13 +471,16 @@ class AmulAPI:
 
     def get_protein_products(self, substore_id: str = None) -> List[dict]:
         """Fetch all protein products with stock info - always gets fresh data"""
-        pincode = self.pincode
+        # Use canonical pincode if available (e.g., 400001 instead of 400063)
+        # This ensures Amul website recognizes the pincode
+        pincode = self.canonical_pincode or self.pincode
 
         # Always fetch fresh stock data (don't use stale cache)
         try:
             if not pincode:
                 pincode = '400001'  # Default Mumbai pincode
 
+            logger.info(f"Fetching products using pincode: {pincode}")
             result = self._run_async(self._enter_pincode_and_fetch(pincode))
             raw_products = result.get('products', [])
 
@@ -518,6 +542,16 @@ class AmulAPI:
         """Set pincode"""
         self.pincode = pincode
         self.substore_id = substore_id
+
+        # Check if we have cached pincode data with canonical_pincode
+        if pincode in self._pincode_cache:
+            cached_data = self._pincode_cache[pincode]
+            self.canonical_pincode = cached_data.get('canonical_pincode', pincode)
+            self.substore_name = cached_data.get('substore_name', '')
+            logger.info(f"Set pincode {pincode}, using canonical {self.canonical_pincode} for product fetching")
+        else:
+            self.canonical_pincode = pincode
+
         return True
 
     def get_product_stock(self, sku: str, substore_id: str = None) -> Optional[dict]:
