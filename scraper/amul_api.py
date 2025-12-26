@@ -503,10 +503,23 @@ class AmulAPI:
             sku = item.get('sku')
             if sku and sku not in seen_skus:
                 seen_skus.add(sku)
-                # CRITICAL: Use 'available' field for pincode-specific stock, not 'inventory_quantity'
-                # 'available' = stock available at the user's pincode/location
-                # 'inventory_quantity' = total warehouse stock (not location-specific)
-                available_qty = item.get("available", 0)
+
+                # Get quantity - try multiple fields in priority order:
+                # 1. 'available' - location-specific stock (if > 1)
+                # 2. 'inventory_quantity' - total stock
+                # 3. Default to 0
+                available = item.get("available", 0)
+                inventory_qty = item.get("inventory_quantity", 0)
+
+                # If 'available' is just a boolean indicator (0 or 1), use inventory_quantity instead
+                if isinstance(available, (int, float)) and available > 1:
+                    quantity = int(available)
+                elif isinstance(inventory_qty, (int, float)):
+                    quantity = int(inventory_qty)
+                else:
+                    quantity = 0
+
+                logger.debug(f"Product {sku}: available={available}, inventory_quantity={inventory_qty}, using quantity={quantity}")
 
                 product = {
                     "id": item.get("_id"),
@@ -515,9 +528,9 @@ class AmulAPI:
                     "alias": item.get("alias"),
                     "price": item.get("price", 0),
                     "compare_price": item.get("compare_price", 0),
-                    "quantity": available_qty,  # Use pincode-specific availability
+                    "quantity": quantity,
                     "allow_out_of_stock": item.get("inventory_allow_out_of_stock", False),
-                    "in_stock": available_qty > 0,  # Based on pincode-specific stock
+                    "in_stock": quantity > 0,
                     "image_url": self._get_image_url(item.get("images", [])),
                     "product_url": f"{config.AMUL_BASE_URL}/en/product/{item.get('alias', '')}"
                 }

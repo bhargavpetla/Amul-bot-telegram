@@ -41,9 +41,11 @@ def test_set_pincode_with_empty_cache():
         products = api.get_protein_products()
         if products:
             print(f"   [SUCCESS] Loaded {len(products)} products")
-            print(f"\n   Sample products:")
-            for i, p in enumerate(products[:3], 1):
-                print(f"   {i}. {p['name']} - Rs.{p['price']} - {'In Stock' if p['in_stock'] else 'Out of Stock'}")
+            print(f"\n   Sample products with quantities:")
+            for i, p in enumerate(products[:5], 1):
+                stock_status = f"In Stock (Qty: {p['quantity']})" if p['in_stock'] else "Out of Stock"
+                print(f"   {i}. {p['name'][:50]}")
+                print(f"      Rs.{p['price']} - {stock_status}")
             return True
         else:
             print("   [FAILED] No products returned")
