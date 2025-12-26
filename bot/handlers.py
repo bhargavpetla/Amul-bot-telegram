@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 db = Database()
 amul_api = AmulAPI()
 
+# Global state tracking (more reliable than context.user_data)
+USER_STATES = {}
+
 
 def get_main_menu_keyboard(has_pincode=False):
     """Get modern main menu keyboard"""
@@ -45,7 +48,8 @@ def get_main_menu_keyboard(has_pincode=False):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     # Clear any pending state
-    context.user_data.pop("awaiting_pincode", None)
+    user_id = update.effective_user.id
+    USER_STATES.pop(user_id, None)
 
     user = update.effective_user
     db.add_user(user.id, user.username, user.first_name)
@@ -82,7 +86,7 @@ I'll notify you *instantly* when Amul protein products are back in stock at your
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command"""
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(update.effective_user.id, None)
 
     user = db.get_user(update.effective_user.id)
     has_pincode = user and user.get("pincode")
@@ -150,8 +154,9 @@ _Example: 400001_
     await update.message.reply_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
     # Set state to wait for pincode
-    context.user_data["awaiting_pincode"] = True
-    logger.info(f"Set awaiting_pincode=True for user {update.effective_user.id}")
+    user_id = update.effective_user.id
+    USER_STATES[user_id] = "awaiting_pincode"
+    logger.info(f"Set USER_STATES[{user_id}] = awaiting_pincode")
 
 
 async def set_pincode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,9 +193,10 @@ _Example: 400063_
     except:
         await query.message.reply_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # Set state to wait for pincode
-    context.user_data["awaiting_pincode"] = True
-    logger.info(f"Set awaiting_pincode=True for user {query.from_user.id} (callback)")
+    # Set state to wait for pincode using global dict
+    user_id = query.from_user.id
+    USER_STATES[user_id] = "awaiting_pincode"
+    logger.info(f"Set USER_STATES[{user_id}] = awaiting_pincode (callback)")
 
 
 async def process_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -217,7 +223,7 @@ async def process_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # Clear the awaiting state
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(user_id, None)
 
     # Search pincode
     logger.info(f"Searching pincode {pincode}...")
@@ -280,7 +286,7 @@ async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("Cancelled")
 
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(query.from_user.id, None)
 
     user = db.get_user(query.from_user.id)
     has_pincode = user and user.get("pincode")
@@ -294,7 +300,7 @@ async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show available products for subscription"""
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(update.effective_user.id, None)
     user = db.get_user(update.effective_user.id)
 
     if not user or not user.get("pincode"):
@@ -319,7 +325,7 @@ async def show_products_callback(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     await query.answer()
 
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(query.from_user.id, None)
     user = db.get_user(query.from_user.id)
 
     if not user or not user.get("pincode"):
@@ -562,7 +568,7 @@ async def handle_product_toggle(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def my_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user's current status"""
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(update.effective_user.id, None)
     await _show_status(update.message, update.effective_user.id)
 
 
@@ -570,7 +576,7 @@ async def my_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Show status from callback"""
     query = update.callback_query
     await query.answer()
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(query.from_user.id, None)
     await _show_status(query, query.from_user.id, is_callback=True)
 
 
@@ -635,7 +641,7 @@ async def _show_status(msg, user_id, is_callback=False):
 
 async def check_instock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check what's currently in stock"""
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(update.effective_user.id, None)
     loading_msg = await update.message.reply_text(
         "📦 *Checking Stock...*\n\n⏳ _Fetching live data..._",
         parse_mode="Markdown"
@@ -647,7 +653,7 @@ async def check_instock_callback(update: Update, context: ContextTypes.DEFAULT_T
     """Check stock from callback"""
     query = update.callback_query
     await query.answer()
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(query.from_user.id, None)
 
     await query.edit_message_text(
         "📦 *Checking Stock...*\n\n⏳ _Fetching live data..._",
@@ -743,7 +749,7 @@ instantly when they're available.
 
 async def stop_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stop all notifications"""
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(update.effective_user.id, None)
     keyboard = [
         [
             InlineKeyboardButton("✅ Yes, Stop All", callback_data="confirm_stop"),
@@ -763,7 +769,7 @@ async def stop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stop from callback"""
     query = update.callback_query
     await query.answer()
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(query.from_user.id, None)
 
     keyboard = [
         [
@@ -812,7 +818,7 @@ async def handle_start_callback(update: Update, context: ContextTypes.DEFAULT_TY
     """Handle main menu callback"""
     query = update.callback_query
     await query.answer()
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(query.from_user.id, None)
 
     user = db.get_user(query.from_user.id)
     has_pincode = user and user.get("pincode")
@@ -838,7 +844,7 @@ async def handle_help_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     """Handle help callback"""
     query = update.callback_query
     await query.answer()
-    context.user_data.pop("awaiting_pincode", None)
+    USER_STATES.pop(query.from_user.id, None)
 
     user = db.get_user(query.from_user.id)
     has_pincode = user and user.get("pincode")
@@ -870,11 +876,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    logger.info(f"Received text '{text}' from user {user_id}, awaiting_pincode={context.user_data.get('awaiting_pincode')}")
+    current_state = USER_STATES.get(user_id)
+    logger.info(f"Received text '{text}' from user {user_id}, state={current_state}, USER_STATES={USER_STATES}")
 
     # Check if we're waiting for a pincode
-    if context.user_data.get("awaiting_pincode"):
-        logger.info(f"Processing as pincode input")
+    if current_state == "awaiting_pincode":
+        logger.info(f"Processing as pincode input for user {user_id}")
         await process_pincode(update, context)
         return
 
