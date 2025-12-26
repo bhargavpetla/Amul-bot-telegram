@@ -539,18 +539,27 @@ class AmulAPI:
         return True
 
     def set_pincode(self, pincode: str, substore_id: str) -> bool:
-        """Set pincode"""
+        """Set pincode and determine canonical pincode for product fetching"""
         self.pincode = pincode
         self.substore_id = substore_id
 
-        # Check if we have cached pincode data with canonical_pincode
+        # Try to get canonical pincode from cache first
         if pincode in self._pincode_cache:
             cached_data = self._pincode_cache[pincode]
             self.canonical_pincode = cached_data.get('canonical_pincode', pincode)
             self.substore_name = cached_data.get('substore_name', '')
-            logger.info(f"Set pincode {pincode}, using canonical {self.canonical_pincode} for product fetching")
+            logger.info(f"Set pincode {pincode} (from cache), using canonical {self.canonical_pincode}")
         else:
-            self.canonical_pincode = pincode
+            # Cache miss - check fallback mapping to determine canonical pincode
+            fallback_data = self._get_fallback_substore(pincode)
+            if fallback_data:
+                self.canonical_pincode = fallback_data.get('canonical_pincode', pincode)
+                self.substore_name = fallback_data.get('substore_name', '')
+                logger.info(f"Set pincode {pincode} (from fallback), using canonical {self.canonical_pincode}")
+            else:
+                # Not in fallback mapping, use pincode as-is
+                self.canonical_pincode = pincode
+                logger.info(f"Set pincode {pincode}, no fallback found, using as-is")
 
         return True
 
