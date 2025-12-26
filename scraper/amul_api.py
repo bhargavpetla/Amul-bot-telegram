@@ -100,24 +100,41 @@ class AmulAPI:
             )
             page = await context.new_page()
 
-            # Capture API responses
+            # Track all network requests for debugging
+            all_requests = []
+            all_responses = []
+
+            async def handle_request(request):
+                url = request.url
+                if 'pincode' in url.lower() or 'entity' in url.lower():
+                    all_requests.append(url)
+                    logger.info(f"Request: {url}")
+
             async def handle_response(response):
                 url = response.url
+                all_responses.append(url)
+
                 try:
-                    if '/entity/pincode' in url:
-                        data = await response.json()
-                        logger.info(f"Pincode API response: {data}")
-                        records = data.get('records', [])
-                        # Try exact match first
-                        for rec in records:
-                            if str(rec.get('pincode')) == str(pincode):
-                                result['pincode_info'] = rec
-                                logger.info(f"Found exact pincode match: {rec}")
-                                break
-                        # If no exact match, use first record (partial match)
-                        if not result['pincode_info'] and records:
-                            result['pincode_info'] = records[0]
-                            logger.info(f"Using first pincode record: {records[0]}")
+                    # Log all API calls for debugging
+                    if '/entity/pincode' in url or 'pincode' in url.lower():
+                        logger.info(f"Pincode-related response URL: {url}")
+                        try:
+                            data = await response.json()
+                            logger.info(f"Pincode API response data: {data}")
+                            records = data.get('records', [])
+                            # Try exact match first
+                            for rec in records:
+                                if str(rec.get('pincode')) == str(pincode):
+                                    result['pincode_info'] = rec
+                                    logger.info(f"Found exact pincode match: {rec}")
+                                    break
+                            # If no exact match, use first record (partial match)
+                            if not result['pincode_info'] and records:
+                                result['pincode_info'] = records[0]
+                                logger.info(f"Using first pincode record: {records[0]}")
+                        except:
+                            text = await response.text()
+                            logger.info(f"Pincode response (not JSON): {text[:500]}")
 
                     elif 'ms.products' in url and 'protein' in url.lower():
                         data = await response.json()
@@ -126,46 +143,89 @@ class AmulAPI:
                             result['products'].extend(items)
                             logger.info(f"Found {len(items)} products")
                 except Exception as e:
-                    logger.error(f"Response handler error: {e}")
+                    logger.error(f"Response handler error for {url}: {e}")
                     pass
 
+            page.on('request', handle_request)
             page.on('response', handle_response)
 
             try:
                 # Go to protein page
+                logger.info(f"Navigating to {config.AMUL_BASE_URL}/en/browse/protein")
                 await page.goto(f'{config.AMUL_BASE_URL}/en/browse/protein', timeout=30000)
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
 
-                # Find and fill pincode input
-                pincode_input = await page.wait_for_selector(
-                    'input[type="tel"], input[placeholder*="pincode" i], input[name*="pincode" i]',
-                    timeout=10000
-                )
+                # Find and fill pincode input - try multiple selectors
+                pincode_input = None
+                selectors = [
+                    'input[type="tel"]',
+                    'input[placeholder*="pincode" i]',
+                    'input[name*="pincode" i]',
+                    'input[id*="pincode" i]',
+                    'input[class*="pincode" i]'
+                ]
+
+                for selector in selectors:
+                    try:
+                        pincode_input = await page.wait_for_selector(selector, timeout=3000)
+                        if pincode_input:
+                            logger.info(f"Found pincode input with selector: {selector}")
+                            break
+                    except:
+                        continue
 
                 if pincode_input:
                     # Clear and enter pincode
+                    logger.info(f"Entering pincode: {pincode}")
+                    await pincode_input.click()
                     await pincode_input.fill('')
+                    await asyncio.sleep(0.5)
                     await pincode_input.type(pincode, delay=100)  # Type slowly for dropdown
-                    await asyncio.sleep(2)
+                    logger.info(f"Typed pincode, waiting for dropdown...")
+                    await asyncio.sleep(3)
 
                     # Wait for dropdown suggestions and click the matching one
+                    dropdown_found = False
                     try:
                         # Look for any dropdown item containing the pincode (more flexible selectors)
-                        dropdown_item = await page.wait_for_selector(
-                            f'li:has-text("{pincode}"), [role="option"]:has-text("{pincode}"), div[class*="option"]:has-text("{pincode}")',
-                            timeout=5000
-                        )
-                        if dropdown_item:
-                            await dropdown_item.click()
-                            await asyncio.sleep(3)
+                        dropdown_selectors = [
+                            f'li:has-text("{pincode}")',
+                            f'[role="option"]:has-text("{pincode}")',
+                            f'div[class*="option"]:has-text("{pincode}")',
+                            f'div[class*="dropdown"] >> text={pincode}',
+                            f'.dropdown-item:has-text("{pincode}")'
+                        ]
+
+                        for ds in dropdown_selectors:
+                            try:
+                                dropdown_item = await page.wait_for_selector(ds, timeout=2000)
+                                if dropdown_item:
+                                    logger.info(f"Found dropdown with selector: {ds}")
+                                    await dropdown_item.click()
+                                    dropdown_found = True
+                                    await asyncio.sleep(3)
+                                    break
+                            except:
+                                continue
+
                     except Exception as e:
-                        logger.info(f"No dropdown found, trying Enter: {e}")
-                        # If no dropdown, just press Enter
+                        logger.info(f"Dropdown search error: {e}")
+
+                    if not dropdown_found:
+                        logger.info("No dropdown found, pressing Enter")
                         await page.keyboard.press('Enter')
                         await asyncio.sleep(3)
 
                     # Wait for products to load
+                    logger.info("Waiting for products to load...")
                     await asyncio.sleep(5)
+
+                    # Log final state
+                    logger.info(f"Captured {len(all_requests)} requests, {len(all_responses)} responses")
+                    logger.info(f"Pincode info found: {result['pincode_info'] is not None}")
+                    logger.info(f"Products found: {len(result['products'])}")
+                else:
+                    logger.error("Could not find pincode input field!")
 
             except Exception as e:
                 logger.error(f"Browser automation error: {e}")
@@ -208,11 +268,59 @@ class AmulAPI:
 
                 return pincode_data
 
+            # Fallback: Use regional mapping for known pincode ranges
+            logger.warning(f"No pincode info from API for {pincode}, trying fallback...")
+            fallback_data = self._get_fallback_substore(pincode)
+            if fallback_data:
+                logger.info(f"Using fallback substore for {pincode}: {fallback_data}")
+                self._pincode_cache[pincode] = fallback_data
+                self.pincode = pincode
+                self.substore_id = fallback_data['substore_id']
+                self.substore_name = fallback_data['substore_name']
+                return fallback_data
+
             logger.warning(f"No pincode info found for {pincode}")
             return None
         except Exception as e:
             logger.error(f"Pincode search error for {pincode}: {e}", exc_info=True)
             return None
+
+    def _get_fallback_substore(self, pincode: str) -> Optional[dict]:
+        """Get fallback substore based on pincode range"""
+        try:
+            pin_num = int(pincode)
+
+            # Mumbai pincodes: 400001-400104
+            if 400001 <= pin_num <= 400104:
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('mumbai-br'),
+                    "substore_name": "mumbai-br",
+                    "city": "Mumbai",
+                    "state": "Maharashtra"
+                }
+            # Pune pincodes: 411001-411060
+            elif 411001 <= pin_num <= 411060:
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('pune-br'),
+                    "substore_name": "pune-br",
+                    "city": "Pune",
+                    "state": "Maharashtra"
+                }
+            # Delhi pincodes: 110001-110096
+            elif 110001 <= pin_num <= 110096:
+                return {
+                    "pincode": pincode,
+                    "substore_id": self._get_substore_id('delhi'),
+                    "substore_name": "delhi",
+                    "city": "Delhi",
+                    "state": "Delhi"
+                }
+        except:
+            pass
+
+        return None
 
     def get_protein_products(self, substore_id: str = None) -> List[dict]:
         """Fetch all protein products with stock info - always gets fresh data"""
