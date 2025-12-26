@@ -4,7 +4,6 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    ConversationHandler,
     ContextTypes,
     filters
 )
@@ -13,9 +12,6 @@ from scraper import AmulAPI
 import logging
 
 logger = logging.getLogger(__name__)
-
-# Conversation states
-WAITING_PINCODE = 1
 
 # Initialize database and API
 db = Database()
@@ -48,6 +44,9 @@ def get_main_menu_keyboard(has_pincode=False):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
+    # Clear any pending state
+    context.user_data.pop("awaiting_pincode", None)
+
     user = update.effective_user
     db.add_user(user.id, user.username, user.first_name)
 
@@ -83,6 +82,8 @@ I'll notify you *instantly* when Amul protein products are back in stock at your
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command"""
+    context.user_data.pop("awaiting_pincode", None)
+
     user = db.get_user(update.effective_user.id)
     has_pincode = user and user.get("pincode")
 
@@ -121,8 +122,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, parse_mode="Markdown", reply_markup=reply_markup)
 
 
-async def set_pincode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start pincode setting conversation"""
+async def set_pincode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start pincode setting from command"""
     user = db.get_user(update.effective_user.id)
     current_pincode = user.get("pincode") if user else None
 
@@ -134,7 +135,6 @@ Your current pincode: *{current_pincode}*
 
 ━━━━━━━━━━━━━━━━━━━━━━
 Enter new 6-digit pincode:
-_(or /cancel to keep current)_
 """
     else:
         message = """
@@ -148,11 +148,14 @@ _Example: 400001_
 
     keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cb_cancel")]]
     await update.message.reply_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-    return WAITING_PINCODE
+
+    # Set state to wait for pincode
+    context.user_data["awaiting_pincode"] = True
+    logger.info(f"Set awaiting_pincode=True for user {update.effective_user.id}")
 
 
-async def set_pincode_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start pincode setting from callback"""
+async def set_pincode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start pincode setting from callback button"""
     query = update.callback_query
     await query.answer()
 
@@ -166,28 +169,36 @@ async def set_pincode_start_callback(update: Update, context: ContextTypes.DEFAU
 Your current pincode: *{current_pincode}*
 
 ━━━━━━━━━━━━━━━━━━━━━━
-Enter new 6-digit pincode:
-_(or tap Cancel to keep current)_
+*Type your new 6-digit pincode:*
 """
     else:
         message = """
 📍 *Set Your Pincode*
 
 ━━━━━━━━━━━━━━━━━━━━━━
-Enter your 6-digit delivery pincode:
+*Type your 6-digit delivery pincode:*
 
-_Example: 400001_
+_Example: 400063_
 """
 
     keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cb_cancel")]]
-    await query.edit_message_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    try:
+        await query.edit_message_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    except:
+        await query.message.reply_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    # Set state to wait for pincode
     context.user_data["awaiting_pincode"] = True
-    return WAITING_PINCODE
+    logger.info(f"Set awaiting_pincode=True for user {query.from_user.id} (callback)")
 
 
-async def set_pincode_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Receive and validate pincode"""
+async def process_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process the pincode entered by user"""
     pincode = update.message.text.strip()
+    user_id = update.effective_user.id
+
+    logger.info(f"Processing pincode: {pincode} for user {user_id}")
 
     # Validate pincode format
     if not pincode.isdigit() or len(pincode) != 6:
@@ -197,15 +208,21 @@ async def set_pincode_receive(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        return WAITING_PINCODE
+        return  # Keep awaiting_pincode = True
 
-    # Show loading
+    # Show loading message
     loading_msg = await update.message.reply_text(
-        "🔍 *Checking pincode...*\n\n⏳ _Please wait..._",
+        "🔍 *Checking pincode...*\n\n⏳ _Please wait, this may take 10-15 seconds..._",
         parse_mode="Markdown"
     )
 
+    # Clear the awaiting state
+    context.user_data.pop("awaiting_pincode", None)
+
+    # Search pincode
+    logger.info(f"Searching pincode {pincode}...")
     pincode_info = amul_api.search_pincode(pincode)
+    logger.info(f"Pincode search result: {pincode_info}")
 
     if not pincode_info:
         keyboard = [
@@ -219,17 +236,15 @@ async def set_pincode_receive(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        return ConversationHandler.END
+        return
 
     # Save to database
     db.update_user_pincode(
-        update.effective_user.id,
+        user_id,
         pincode_info["pincode"],
         pincode_info["substore_id"],
         pincode_info["substore_name"]
     )
-
-    context.user_data["awaiting_pincode"] = False
 
     # Success message with next step buttons
     keyboard = [
@@ -258,29 +273,15 @@ Select products you want to track!
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return ConversationHandler.END
-
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel conversation"""
-    context.user_data["awaiting_pincode"] = False
-    user = db.get_user(update.effective_user.id)
-    has_pincode = user and user.get("pincode")
-
-    await update.message.reply_text(
-        "❌ *Cancelled*\n\nChoose an option below:",
-        parse_mode="Markdown",
-        reply_markup=get_main_menu_keyboard(has_pincode)
-    )
-    return ConversationHandler.END
 
 
 async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel from callback"""
+    """Cancel current operation"""
     query = update.callback_query
     await query.answer("Cancelled")
 
-    context.user_data["awaiting_pincode"] = False
+    context.user_data.pop("awaiting_pincode", None)
+
     user = db.get_user(query.from_user.id)
     has_pincode = user and user.get("pincode")
 
@@ -289,11 +290,11 @@ async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=get_main_menu_keyboard(has_pincode)
     )
-    return ConversationHandler.END
 
 
 async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show available products for subscription"""
+    context.user_data.pop("awaiting_pincode", None)
     user = db.get_user(update.effective_user.id)
 
     if not user or not user.get("pincode"):
@@ -318,6 +319,7 @@ async def show_products_callback(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     await query.answer()
 
+    context.user_data.pop("awaiting_pincode", None)
     user = db.get_user(query.from_user.id)
 
     if not user or not user.get("pincode"):
@@ -382,7 +384,6 @@ async def _show_products_list(msg, user, user_id, context, is_callback=False):
             is_subscribed = product["sku"] in subscribed_skus
             is_in_stock = product.get("in_stock", False)
 
-            # Modern status indicators
             sub_icon = "✅" if is_subscribed else "⬜"
             stock_icon = "🟢" if is_in_stock else "🔴"
 
@@ -393,7 +394,6 @@ async def _show_products_list(msg, user, user_id, context, is_callback=False):
                 InlineKeyboardButton(btn_text, callback_data=f"toggle_{product['sku']}")
             ])
 
-        # Add action buttons
         keyboard.append([
             InlineKeyboardButton("✅ Save & Continue", callback_data="products_done"),
             InlineKeyboardButton("🔄 Refresh", callback_data="cb_products")
@@ -562,6 +562,7 @@ async def handle_product_toggle(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def my_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user's current status"""
+    context.user_data.pop("awaiting_pincode", None)
     await _show_status(update.message, update.effective_user.id)
 
 
@@ -569,6 +570,7 @@ async def my_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Show status from callback"""
     query = update.callback_query
     await query.answer()
+    context.user_data.pop("awaiting_pincode", None)
     await _show_status(query, query.from_user.id, is_callback=True)
 
 
@@ -633,6 +635,7 @@ async def _show_status(msg, user_id, is_callback=False):
 
 async def check_instock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check what's currently in stock"""
+    context.user_data.pop("awaiting_pincode", None)
     loading_msg = await update.message.reply_text(
         "📦 *Checking Stock...*\n\n⏳ _Fetching live data..._",
         parse_mode="Markdown"
@@ -644,6 +647,7 @@ async def check_instock_callback(update: Update, context: ContextTypes.DEFAULT_T
     """Check stock from callback"""
     query = update.callback_query
     await query.answer()
+    context.user_data.pop("awaiting_pincode", None)
 
     await query.edit_message_text(
         "📦 *Checking Stock...*\n\n⏳ _Fetching live data..._",
@@ -739,6 +743,7 @@ instantly when they're available.
 
 async def stop_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stop all notifications"""
+    context.user_data.pop("awaiting_pincode", None)
     keyboard = [
         [
             InlineKeyboardButton("✅ Yes, Stop All", callback_data="confirm_stop"),
@@ -758,6 +763,7 @@ async def stop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stop from callback"""
     query = update.callback_query
     await query.answer()
+    context.user_data.pop("awaiting_pincode", None)
 
     keyboard = [
         [
@@ -802,39 +808,42 @@ async def handle_stop_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all navigation callbacks"""
+async def handle_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle main menu callback"""
     query = update.callback_query
-    data = query.data
+    await query.answer()
+    context.user_data.pop("awaiting_pincode", None)
 
-    # Route to appropriate handler
-    if data == "cb_start":
-        await query.answer()
-        user = db.get_user(query.from_user.id)
-        has_pincode = user and user.get("pincode")
+    user = db.get_user(query.from_user.id)
+    has_pincode = user and user.get("pincode")
 
-        welcome = f"""
+    welcome = f"""
 ╔══════════════════════════════════╗
      🥛 *AMUL PROTEIN ALERTS* 🥛
 ╚══════════════════════════════════╝
 
 """
-        if has_pincode:
-            welcome += f"📍 Pincode: *{user['pincode']}*\n\n"
-        welcome += "👇 *Choose an option:*"
+    if has_pincode:
+        welcome += f"📍 Pincode: *{user['pincode']}*\n\n"
+    welcome += "👇 *Choose an option:*"
 
-        await query.edit_message_text(
-            welcome,
-            parse_mode="Markdown",
-            reply_markup=get_main_menu_keyboard(has_pincode)
-        )
+    await query.edit_message_text(
+        welcome,
+        parse_mode="Markdown",
+        reply_markup=get_main_menu_keyboard(has_pincode)
+    )
 
-    elif data == "cb_help":
-        await query.answer()
-        user = db.get_user(query.from_user.id)
-        has_pincode = user and user.get("pincode")
 
-        help_text = """
+async def handle_help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle help callback"""
+    query = update.callback_query
+    await query.answer()
+    context.user_data.pop("awaiting_pincode", None)
+
+    user = db.get_user(query.from_user.id)
+    has_pincode = user and user.get("pincode")
+
+    help_text = """
 ╔══════════════════════════════════╗
           ❓ *HELP CENTER*
 ╚══════════════════════════════════╝
@@ -849,20 +858,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Tap buttons for quick actions
 • You can track multiple products
 """
-        await query.edit_message_text(
-            help_text,
-            parse_mode="Markdown",
-            reply_markup=get_main_menu_keyboard(has_pincode)
-        )
+    await query.edit_message_text(
+        help_text,
+        parse_mode="Markdown",
+        reply_markup=get_main_menu_keyboard(has_pincode)
+    )
 
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text messages - check if awaiting pincode"""
-    if context.user_data.get("awaiting_pincode"):
-        return await set_pincode_receive(update, context)
+    """Handle all text messages"""
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
 
-    # Default response
-    user = db.get_user(update.effective_user.id)
+    logger.info(f"Received text '{text}' from user {user_id}, awaiting_pincode={context.user_data.get('awaiting_pincode')}")
+
+    # Check if we're waiting for a pincode
+    if context.user_data.get("awaiting_pincode"):
+        logger.info(f"Processing as pincode input")
+        await process_pincode(update, context)
+        return
+
+    # Default response - show menu
+    user = db.get_user(user_id)
     has_pincode = user and user.get("pincode")
 
     await update.message.reply_text(
@@ -875,42 +892,29 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 def setup_handlers(application: Application):
     """Set up all bot handlers"""
 
-    # Pincode conversation handler
-    pincode_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("setpincode", set_pincode_start),
-            CallbackQueryHandler(set_pincode_start_callback, pattern="^cb_setpincode$")
-        ],
-        states={
-            WAITING_PINCODE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, set_pincode_receive),
-                CallbackQueryHandler(cancel_callback, pattern="^cb_cancel$")
-            ]
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CallbackQueryHandler(cancel_callback, pattern="^cb_cancel$")
-        ],
-        per_message=False
-    )
-
-    # Add handlers in order
+    # Command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(pincode_conv)
+    application.add_handler(CommandHandler("setpincode", set_pincode_command))
     application.add_handler(CommandHandler("products", show_products))
     application.add_handler(CommandHandler("mystatus", my_status))
     application.add_handler(CommandHandler("instock", check_instock))
     application.add_handler(CommandHandler("stop", stop_notifications))
+    application.add_handler(CommandHandler("cancel", lambda u, c: cancel_callback(u, c)))
 
-    # Callback query handlers
-    application.add_handler(CallbackQueryHandler(handle_product_toggle, pattern="^toggle_|^products_done$"))
-    application.add_handler(CallbackQueryHandler(handle_stop_confirm, pattern="^confirm_stop$|^cancel_stop$"))
+    # Callback query handlers - ORDER MATTERS!
+    application.add_handler(CallbackQueryHandler(set_pincode_callback, pattern="^cb_setpincode$"))
+    application.add_handler(CallbackQueryHandler(cancel_callback, pattern="^cb_cancel$"))
     application.add_handler(CallbackQueryHandler(show_products_callback, pattern="^cb_products$"))
     application.add_handler(CallbackQueryHandler(my_status_callback, pattern="^cb_mystatus$"))
     application.add_handler(CallbackQueryHandler(check_instock_callback, pattern="^cb_instock$"))
     application.add_handler(CallbackQueryHandler(stop_callback, pattern="^cb_stop$"))
-    application.add_handler(CallbackQueryHandler(handle_callback, pattern="^cb_start$|^cb_help$"))
+    application.add_handler(CallbackQueryHandler(handle_start_callback, pattern="^cb_start$"))
+    application.add_handler(CallbackQueryHandler(handle_help_callback, pattern="^cb_help$"))
+    application.add_handler(CallbackQueryHandler(handle_product_toggle, pattern="^toggle_|^products_done$"))
+    application.add_handler(CallbackQueryHandler(handle_stop_confirm, pattern="^confirm_stop$|^cancel_stop$"))
 
-    # Text message handler (for pincode input and general messages)
+    # Text message handler - MUST BE LAST
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+
+    logger.info("All handlers registered successfully")
