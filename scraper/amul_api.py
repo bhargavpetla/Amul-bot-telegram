@@ -106,20 +106,27 @@ class AmulAPI:
                 try:
                     if '/entity/pincode' in url:
                         data = await response.json()
+                        logger.info(f"Pincode API response: {data}")
                         records = data.get('records', [])
+                        # Try exact match first
                         for rec in records:
-                            if rec.get('pincode') == pincode:
+                            if str(rec.get('pincode')) == str(pincode):
                                 result['pincode_info'] = rec
+                                logger.info(f"Found exact pincode match: {rec}")
                                 break
+                        # If no exact match, use first record (partial match)
                         if not result['pincode_info'] and records:
                             result['pincode_info'] = records[0]
+                            logger.info(f"Using first pincode record: {records[0]}")
 
                     elif 'ms.products' in url and 'protein' in url.lower():
                         data = await response.json()
                         items = data.get('data', [])
                         if items:
                             result['products'].extend(items)
-                except:
+                            logger.info(f"Found {len(items)} products")
+                except Exception as e:
+                    logger.error(f"Response handler error: {e}")
                     pass
 
             page.on('response', handle_response)
@@ -143,15 +150,16 @@ class AmulAPI:
 
                     # Wait for dropdown suggestions and click the matching one
                     try:
-                        # Look for dropdown item with the pincode
+                        # Look for any dropdown item containing the pincode (more flexible selectors)
                         dropdown_item = await page.wait_for_selector(
-                            f'[class*="dropdown"] >> text=/{pincode}/, .suggestion >> text=/{pincode}/, li >> text=/{pincode}/',
-                            timeout=3000
+                            f'li:has-text("{pincode}"), [role="option"]:has-text("{pincode}"), div[class*="option"]:has-text("{pincode}")',
+                            timeout=5000
                         )
                         if dropdown_item:
                             await dropdown_item.click()
                             await asyncio.sleep(3)
-                    except:
+                    except Exception as e:
+                        logger.info(f"No dropdown found, trying Enter: {e}")
                         # If no dropdown, just press Enter
                         await page.keyboard.press('Enter')
                         await asyncio.sleep(3)
@@ -172,6 +180,7 @@ class AmulAPI:
             return self._pincode_cache[pincode]
 
         try:
+            logger.info(f"Searching for pincode: {pincode}")
             result = self._run_async(self._enter_pincode_and_fetch(pincode))
 
             if result['pincode_info']:
@@ -179,13 +188,14 @@ class AmulAPI:
                 substore_alias = info.get('substore', '')
 
                 pincode_data = {
-                    "pincode": info.get("pincode", pincode),
+                    "pincode": str(info.get("pincode", pincode)),
                     "substore_id": self._get_substore_id(substore_alias) or substore_alias,
                     "substore_name": substore_alias,
                     "city": info.get("city", ""),
                     "state": info.get("state", "")
                 }
 
+                logger.info(f"Pincode search successful: {pincode_data}")
                 self._pincode_cache[pincode] = pincode_data
                 self.pincode = pincode
                 self.substore_id = pincode_data['substore_id']
@@ -194,12 +204,14 @@ class AmulAPI:
                 # Also cache products if we got them
                 if result['products']:
                     self._products_cache[pincode] = result['products']
+                    logger.info(f"Cached {len(result['products'])} products for pincode {pincode}")
 
                 return pincode_data
 
+            logger.warning(f"No pincode info found for {pincode}")
             return None
         except Exception as e:
-            logger.error(f"Pincode search error: {e}")
+            logger.error(f"Pincode search error for {pincode}: {e}", exc_info=True)
             return None
 
     def get_protein_products(self, substore_id: str = None) -> List[dict]:
